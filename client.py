@@ -1,3 +1,8 @@
+
+# ========================
+# use command `python client.py <host> <port>` to start the client
+# ========================
+
 import socket
 import sys
 
