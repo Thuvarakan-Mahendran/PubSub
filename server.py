@@ -14,26 +14,49 @@ if(len(sys.argv) != 2):
 HOST = "0.0.0.0"    # accept connections from any IP address
 PORT = int(sys.argv[1])
 
-Subscribers = []
+Subscribers = {}  # Dictionary to store subscribers by topic: {topic: [list of connections]}
 Subscribers_lock = threading.Lock() # to avoid race conditions when adding/removing subscribers as we have multiple threads
 
-def broadcast_message(message):
-    for sub in Subscribers:
-        sub.sendall(message.encode("utf-8"))
+def broadcast_message(topic, message):
+    """Send message to all subscribers of a specific topic"""
+    with Subscribers_lock:
+        if topic in Subscribers:
+            # Create formatted message with topic
+            formatted_msg = f"{topic}|{message}"
+            for sub in Subscribers[topic]:
+                try:
+                    sub.sendall(formatted_msg.encode("utf-8"))
+                except Exception as e:
+                    print(f"Error sending message to subscriber: {e}")
 
 def handle_client(conn, addr):
     mode = None
+    topic = None
     try:
         data = conn.recv(1024)
         if not data:
             return
-        mode = data.decode("utf-8").strip().upper()
+        registration = data.decode("utf-8").strip().upper()
+        # Parse MODE|TOPIC format
+        if "|" in registration:
+            mode, topic = registration.split("|", 1)
+            topic = topic.strip()
+        else:
+            mode = registration
+        
         if mode not in ["PUBLISHER", "SUBSCRIBER"]:
             return
-        print(f"mode: {mode}")
+        
+        print(f"mode: {mode}, topic: {topic}")
+        
         if mode == "SUBSCRIBER":
-            with Subscribers_lock:      # acquire the lock to avoid race conditions when adding/removing subscribers
-                Subscribers.append(conn)
+            with Subscribers_lock:
+                # Add subscriber to the topic list
+                if topic not in Subscribers:
+                    Subscribers[topic] = []
+                Subscribers[topic].append(conn)
+                print(f"Subscriber added to topic '{topic}'. Total subscribers for '{topic}': {len(Subscribers[topic])}")
+        
         with conn:
             print(f"connected by {addr}")
             while True:
@@ -45,10 +68,17 @@ def handle_client(conn, addr):
                     print("terminate command received. closing connection...")
                     conn.close()
                     break
-                broadcast_message(msg)
+                if mode == "PUBLISHER":
+                    broadcast_message(topic, msg)
     except ConnectionError as e:
         print(f"connection error: {e}")
     finally:
+        # Remove subscriber from the list when disconnecting
+        if mode == "SUBSCRIBER" and topic:
+            with Subscribers_lock:
+                if topic in Subscribers and conn in Subscribers[topic]:
+                    Subscribers[topic].remove(conn)
+                    print(f"Subscriber removed from topic '{topic}'. Remaining subscribers: {len(Subscribers[topic]) if topic in Subscribers else 0}")
         print("closing connection...")
         conn.close()
 
